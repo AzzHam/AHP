@@ -40,14 +40,19 @@ class Compare(object):
         self.weights = None
 
         try:
-            matrix = self.convert(matrix)
+            matrix = self.convert_string(matrix)
+        except AttributeError:
+            pass
+
+        try:
+            matrix = self.convert_not_reciprocal(matrix)
         except AttributeError:
             pass
 
         self.check_input(matrix)
         self.compute()
 
-    def convert(self, matrix_str):
+    def convert_string(self, matrix_str):
         """
         Converts a string of form '1, 2; 3, 4' (or '1 2; 3 4') into a numpy matrix.
         Also converts a string representing only and all entries above the main
@@ -61,6 +66,7 @@ class Compare(object):
         try:
             for x in matrix_str.replace(',', ' ').split(';'):
                 matrix_1.append([eval(y, {'__builtin__': None}, {}) for y in x.split()])
+            print(matrix_1)
             dimension = len(matrix_1[0]) + 1
             matrix_2 = np.ones((dimension, dimension))
             for x, i in enumerate(matrix_1):
@@ -69,12 +75,41 @@ class Compare(object):
                     matrix_2.itemset((x + y + 1, x), 1 / j)
         except IndexError:
             return matrix_1
-        except (NameError, SyntaxError, ZeroDivisionError, ValueError), error:
+        except (NameError, SyntaxError, ZeroDivisionError, ValueError) as error:
             if self.type == 'quant':
                 return matrix_1
             else:
                 raise AHPException('Error converting to matrix: {}'.format(error))
         return matrix_2
+
+    def convert_not_reciprocal(self, matrix_nr):
+        """
+        Converts an upper diagonal matrix to a complete, reciprocal matrix
+        :param matrix_nr: the upper diagonal and non-reciprocal matrix
+        :return: a reciprocal matrix 
+        """
+        matrix_1 = matrix_nr
+        if np.isnan(matrix_1[1][0]):
+            dimension = len(matrix_1[0])
+            matrix_2 = np.ones((dimension, dimension))
+            try:
+                for x, i in enumerate(matrix_1):
+                    for y, j in enumerate(i):
+                        if ~np.isnan(j):
+                            matrix_2.itemset((x, y), j)
+                            matrix_2.itemset((y, x), 1 / j)
+            except IndexError as err:
+                print("exp 1:",err)
+                return matrix_1
+            except (NameError, SyntaxError, ZeroDivisionError, ValueError) as error:
+                print("exp 2:", error)
+                if self.type == 'quant':
+                    return matrix_1
+                else:
+                    raise AHPException('Error converting to matrix: {}'.format(error))
+            return matrix_2
+        else:
+            return matrix_1
 
     def check_input(self, input_matrix):
         """
@@ -91,7 +126,7 @@ class Compare(object):
             raise AHPException('Input matrix is an empty string')
         try:
             matrix = np.matrix(input_matrix)
-        except Exception, error:
+        except Exception as error:
             raise AHPException('Input cannot be cast as a matrix: {}'.format(error))
         shape = matrix.shape[0]
         # Only check these properties for qualitative matrices
@@ -105,7 +140,7 @@ class Compare(object):
                 raise AHPException('Input too large: cannot compute consistency ratio')
             try:
                 np.linalg.matrix_power(matrix, 2)
-            except ValueError, error:
+            except ValueError as error:
                 raise AHPException('Input is not square: {}'.format(error))
             if not (np.multiply(matrix, matrix.T) == np.ones(shape)).all():
                 raise AHPException('Input is not reciprocal')
@@ -127,7 +162,7 @@ class Compare(object):
             # Create the weights dictionary
             comp_dict = dict([(key, val[0]) for key, val in zip(self.criteria, self.priority_vector)])
             self.weights = {self.name: comp_dict}
-        except Exception, error:
+        except Exception as error:
             raise AHPException(error)
         return
 
@@ -211,7 +246,7 @@ class Compare(object):
             # Compute the consistency ratio
             self.consistency_ratio = (np.real(consistency_index / random_index)).round(self.precision)
             return
-        except np.linalg.LinAlgError, error:
+        except np.linalg.LinAlgError as error:
             raise AHPException(error)
 
     def normalize(self):
@@ -223,20 +258,23 @@ class Compare(object):
         total_sum = float(np.sum(self.matrix))
         try:
             self.priority_vector = np.divide(self.matrix, total_sum).round(self.precision).reshape(len(self.matrix), 1)
-        except ValueError, error:
+        except ValueError as error:
             raise AHPException('Error normalizing quantitative values: {}'.format(error))
         self.consistency_ratio = 0.0
         return
 
     def report(self):
-        print 'Name:', self.name
-        print 'CR:', self.consistency_ratio
-        print 'Weights:'
-        sorted_weights = sorted(self.weights[self.name].iteritems(), key=operator.itemgetter(1), reverse=True)
+        #print ('Name:', self.name)
+        #print ('CR:', self.consistency_ratio)
+        #print ('Weights:')
+        sorted_weights = sorted(self.weights[self.name].items(), key=operator.itemgetter(1), reverse=True)
+        weights = []
         for k, v in sorted_weights:
-            print '\t{}: {}'.format(k, round(v, self.precision))
-        print
-        return
+        #    print ('\t{}: {}'.format(k, round(v, self.precision)))
+            weights.append(v)
+        #print()
+        data = [self.matrix, weights, self.consistency_ratio]
+        return data
 
 
 class Compose(object):
@@ -271,11 +309,11 @@ class Compose(object):
         given the priority vectors of its children.
         """
 
-        for pk, pv in self.parent.weights[self.parent.name].iteritems():
+        for pk, pv in self.parent.weights[self.parent.name].items():
             for child in self.children:
 
                 if pk in child.weights:
-                    for ck, cv in child.weights[pk].iteritems():
+                    for ck, cv in child.weights[pk].items():
                         try:
                             self.weights[ck] += np.multiply(pv, cv)
                         except KeyError:
@@ -289,24 +327,25 @@ class Compose(object):
         their normalized values.
         """
 
-        total_sum = sum(self.weights.itervalues())
-        comp_dict = {key: np.divide(value, total_sum) for key, value in self.weights.iteritems()}
+        total_sum = sum(self.weights.values())
+        comp_dict = {key: np.divide(value, total_sum) for key, value in self.weights.items()}
         self.weights = {self.name: comp_dict}
         return
 
     def report(self):
-        print 'Name:', self.name
-        sorted_weights = sorted(self.weights[self.parent.name].iteritems(), key=operator.itemgetter(1), reverse=True)
+        print ('Name:', self.name)
+        #sorted_weights = sorted(self.weights[self.parent.name].items(), key=operator.itemgetter(1), reverse=True)
+        sorted_weights = sorted(self.weights[self.name].items(), key=operator.itemgetter(1), reverse=True)
         for k, v in sorted_weights:
-            print k, ':', round(v, self.precision)
-        print
+            print (k, ':', round(v, self.precision))
+        print()
 
         # print self.parent.weights
         # for child in self.children:
         #     print child.weights
         # print self.weights
-        # print
-        return
+        # print()
+        return  sorted_weights
 
 
 class AHPException(Exception):
@@ -314,7 +353,7 @@ class AHPException(Exception):
     The custom Exception class of the AHP module
     """
     def __init__(self, msg):
-        print msg
+        print (msg)
         exit(1)
 
 
